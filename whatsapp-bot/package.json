@@ -1,0 +1,16 @@
+{
+  "name": "istanbulls-6064-whatsapp-bot",
+  "version": "1.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "latest",
+    "baileys": "^7.0.0-rc14",
+    "dotenv": "latest",
+    "pino": "latest",
+    "qrcode-terminal": "latest"
+  }
+}
