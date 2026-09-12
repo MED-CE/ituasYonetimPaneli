@@ -149,8 +149,17 @@ const menu = [
   ["▥", "Raporlar"],
 ];
 
-const roles = ["Yönetici", "Kaptan", "Üye"];
-const departments = ["Yönetim", "Mechanical", "Programming", "Electronics", "PR / Media", "CAD", "Drive Team", "Other"];
+const roles = ["Yönetici", "Kaptan", "Yazılım Kaptanı", "Elektronik Kaptanı", "Organizasyon Kaptanı", "Mekanik Kaptanı", "Üye"];
+const departments = ["Yönetim", "Mekanik", "Yazılım", "Elektronik", "Organizasyon", "CAD", "Sürüş Ekibi", "Diğer"];
+
+function getManagedDepartments(role) {
+  if (role === "Yönetici" || role === "Kaptan") return "ALL";
+  if (role === "Yazılım Kaptanı") return ["Yazılım"];
+  if (role === "Elektronik Kaptanı") return ["Elektronik"];
+  if (role === "Organizasyon Kaptanı") return ["Organizasyon"];
+  if (role === "Mekanik Kaptanı") return ["Mekanik", "CAD"];
+  return [];
+}
 
 function loadData() {
   return initialData;
@@ -1005,7 +1014,7 @@ function App() {
     return () => clearInterval(timer);
   }, [currentUser]);
 
-  const canManage = role === "Yönetici" || role === "Kaptan";
+  const canManage = role === "Yönetici" || role.includes("Kaptan");
   const canAdmin = role === "Yönetici";
   const visibleMenu = canManage ? menu : menu.filter(([, label]) => !["Üyeler", "Raporlar"].includes(label));
 
@@ -1420,22 +1429,23 @@ function AnnouncementsPage({data,update,canManage,flash}) {
 
 function TasksPage({data,update,canManage,currentUser,flash}) {
   const [modal,setModal]=useState(false);
-  const firstMember = data.members.find(m=>m.active);
+  const managedDeps = getManagedDepartments(currentUser.role);
+  const selectableMembers = data.members.filter(m => m.active && (managedDeps === "ALL" || managedDeps.includes(m.department)));
+
   const [form,setForm]=useState({
     title:"",
     description:"",
-    assignedId:firstMember?.id || "",
+    assignedId:selectableMembers.length ? selectableMembers[0].id : "",
     due:new Date().toISOString().slice(0,10),
     priority:"Orta",
     status:"Bekliyor"
   });
 
   function openNew(){
-    const member = data.members.find(m=>m.active);
     setForm({
       title:"",
       description:"",
-      assignedId:member?.id || "",
+      assignedId:selectableMembers.length ? selectableMembers[0].id : "",
       due:new Date().toISOString().slice(0,10),
       priority:"Orta",
       status:"Bekliyor"
@@ -1527,10 +1537,16 @@ function TasksPage({data,update,canManage,currentUser,flash}) {
       flash("Görev oluşturuldu ancak WhatsApp gitmedi: " + (whatsapp.error || "bilinmeyen hata"));
     }
   }
-  const visibleTasks = canManage ? data.tasks : data.tasks.filter(t => String(t.assigned_id) === String(currentUser.id));
+  const visibleTasks = canManage ? data.tasks.filter(t => {
+    if (managedDeps === "ALL") return true;
+    const assignee = data.members.find(m => String(m.id) === String(t.assigned_id));
+    if (assignee && managedDeps.includes(assignee.department)) return true;
+    return String(t.assigned_id) === String(currentUser.id);
+  }) : data.tasks.filter(t => String(t.assigned_id) === String(currentUser.id));
+
   function changeStatus(id,status){update({tasks:data.tasks.map(t=>t.id===id?{...t,status}:t)});flash("Görev durumu güncellendi.");}
   function remove(id){if(!confirm("Görev silinsin mi?"))return;update({tasks:data.tasks.filter(t=>t.id!==id)});flash("Görev silindi.");}
-  return <><PageTitle title={canManage ? "Görevler" : "Görevlerim"} sub={canManage ? "Görevleri ata, durumlarını takip et ve tamamla." : "Sadece sana atanmış görevler."} action={canManage&&<button className="primary" onClick={openNew}>+ Görev Oluştur</button>}/><div className="taskCards"><div className="taskBox greenBox"><b>{visibleTasks.filter(t=>t.status==="Tamamlandı").length}</b><span>Tamamlanan</span></div><div className="taskBox orangeBox"><b>{visibleTasks.filter(t=>t.status==="Devam Ediyor").length}</b><span>Devam Eden</span></div><div className="taskBox redBox"><b>{visibleTasks.filter(t=>t.status!=="Tamamlandı"&&new Date(t.due)<new Date()).length}</b><span>Gecikmiş</span></div><div className="taskBox grayBox"><b>{visibleTasks.filter(t=>t.status==="Bekliyor").length}</b><span>Bekleyen</span></div></div><div className="panel"><div className="tableHead"><b>Görev</b><b>Sorumlu</b><b>Son Tarih</b><b>Öncelik</b><b>Durum</b><b></b></div>{visibleTasks.map(t=><div className="tableRow" key={t.id}><div><strong>{t.title}</strong><small>{t.description}</small></div><span>{t.assignee}</span><span>{t.due}</span><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><select value={t.status} onChange={e=>changeStatus(t.id,e.target.value)}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select>{canManage&&<button className="iconDanger" onClick={()=>remove(t.id)}>🗑</button>}</div>)}{!visibleTasks.length&&<Empty text="Görev bulunmuyor."/>}</div>{modal&&<Modal title="Yeni Görev" close={()=>setModal(false)}><label>Görev<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label><label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="formGrid"><label>Sorumlu<select value={form.assignedId} onChange={e=>setForm({...form,assignedId:e.target.value})}><option value="">Sorumlu seç</option>{data.members.filter(m=>m.active).map(m=><option key={m.id} value={m.id}>{m.name}{m.phone ? "" : " (telefon yok)"}</option>)}</select></label><label>Son tarih<input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})}/></label></div><div className="formGrid"><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Düşük</option><option>Orta</option><option>Yüksek</option></select></label><label>Durum<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select></label></div><div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Oluştur</button></div></Modal>}</>;
+  return <><PageTitle title={canManage ? "Görevler" : "Görevlerim"} sub={canManage ? "Görevleri ata, durumlarını takip et ve tamamla." : "Sadece sana atanmış görevler."} action={canManage&&<button className="primary" onClick={openNew}>+ Görev Oluştur</button>}/><div className="taskCards"><div className="taskBox greenBox"><b>{visibleTasks.filter(t=>t.status==="Tamamlandı").length}</b><span>Tamamlanan</span></div><div className="taskBox orangeBox"><b>{visibleTasks.filter(t=>t.status==="Devam Ediyor").length}</b><span>Devam Eden</span></div><div className="taskBox redBox"><b>{visibleTasks.filter(t=>t.status!=="Tamamlandı"&&new Date(t.due)<new Date()).length}</b><span>Gecikmiş</span></div><div className="taskBox grayBox"><b>{visibleTasks.filter(t=>t.status==="Bekliyor").length}</b><span>Bekleyen</span></div></div><div className="panel"><div className="tableHead"><b>Görev</b><b>Sorumlu</b><b>Son Tarih</b><b>Öncelik</b><b>Durum</b><b></b></div>{visibleTasks.map(t=><div className="tableRow" key={t.id}><div><strong>{t.title}</strong><small>{t.description}</small></div><span>{t.assignee}</span><span>{t.due}</span><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><select value={t.status} onChange={e=>changeStatus(t.id,e.target.value)}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select>{canManage&&<button className="iconDanger" onClick={()=>remove(t.id)}>🗑</button>}</div>)}{!visibleTasks.length&&<Empty text="Görev bulunmuyor."/>}</div>{modal&&<Modal title="Yeni Görev" close={()=>setModal(false)}><label>Görev<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label><label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="formGrid"><label>Sorumlu<select value={form.assignedId} onChange={e=>setForm({...form,assignedId:e.target.value})}><option value="">Sorumlu seç</option>{selectableMembers.map(m=><option key={m.id} value={m.id}>{m.name}{m.phone ? "" : " (telefon yok)"}</option>)}</select></label><label>Son tarih<input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})}/></label></div><div className="formGrid"><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Düşük</option><option>Orta</option><option>Yüksek</option></select></label><label>Durum<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select></label></div><div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Oluştur</button></div></Modal>}</>;
 }
 
 function WorkshopPage({ data, setData, currentUser, canManage, flash }) {
