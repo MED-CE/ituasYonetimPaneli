@@ -150,14 +150,14 @@ const menu = [
 ];
 
 const roles = ["Yönetici", "Kaptan", "Yazılım Kaptanı", "Elektronik Kaptanı", "Organizasyon Kaptanı", "Mekanik Kaptanı", "Üye"];
-const departments = ["Yönetim", "Mekanik", "Yazılım", "Elektronik", "Organizasyon", "CAD", "Sürüş Ekibi", "Diğer"];
+const departments = ["Yönetim", "Mekanik", "Yazılım", "Elektronik", "Organizasyon", "Diğer"];
 
 function getManagedDepartments(role) {
   if (role === "Yönetici" || role === "Kaptan") return "ALL";
   if (role === "Yazılım Kaptanı") return ["Yazılım"];
   if (role === "Elektronik Kaptanı") return ["Elektronik"];
   if (role === "Organizasyon Kaptanı") return ["Organizasyon"];
-  if (role === "Mekanik Kaptanı") return ["Mekanik", "CAD"];
+  if (role === "Mekanik Kaptanı") return ["Mekanik"];
   return [];
 }
 
@@ -286,7 +286,6 @@ function taskToDb(item, members) {
     title: item.title,
     description: item.description || "",
     assigned_id: item.assigned_id || member?.id || null,
-    assignee: item.assignee || member?.name || "",
     due_date: item.due || null,
     priority: item.priority || "Orta",
     status: item.status || "Bekliyor",
@@ -1435,7 +1434,7 @@ function TasksPage({data,update,canManage,currentUser,flash}) {
   const [form,setForm]=useState({
     title:"",
     description:"",
-    assignedId:selectableMembers.length ? selectableMembers[0].id : "",
+    assignedIds:[],
     due:new Date().toISOString().slice(0,10),
     priority:"Orta",
     status:"Bekliyor"
@@ -1445,7 +1444,7 @@ function TasksPage({data,update,canManage,currentUser,flash}) {
     setForm({
       title:"",
       description:"",
-      assignedId:selectableMembers.length ? selectableMembers[0].id : "",
+      assignedIds:[],
       due:new Date().toISOString().slice(0,10),
       priority:"Orta",
       status:"Bekliyor"
@@ -1454,89 +1453,44 @@ function TasksPage({data,update,canManage,currentUser,flash}) {
   }
 
   async function save(){
-    if(!form.title.trim()) return;
-
-    const assigned = data.members.find(m => String(m.id) === String(form.assignedId));
-    if (!assigned) {
-      flash("Sorumlu üye seç.");
+    if(!form.title.trim() || form.assignedIds.length === 0) {
+      flash("Görev adı ve en az bir sorumlu seçmelisiniz.");
       return;
     }
 
-    const payload = {
-      title: form.title.trim(),
-      description: form.description || "",
-      assigned_id: assigned.id || null,
-      assignee: assigned.name || "",
-      due_date: form.due || null,
-      priority: form.priority || "Orta",
-      status: form.status || "Bekliyor",
-      created_by: data.user?.id || null,
-    };
+    const newTasks = [];
+    for (const aId of form.assignedIds) {
+      const assigned = data.members.find(m => String(m.id) === String(aId));
+      if (!assigned) continue;
 
-    const { row, error } = await insertTaskRow(payload);
-    if (error) {
-      flash("Görev kaydedilemedi: " + (error.message || "bilinmeyen hata"));
-      return;
+      const payload = {
+        title: form.title.trim(),
+        description: form.description || "",
+        assigned_id: assigned.id || null,
+        due_date: form.due || null,
+        priority: form.priority || "Orta",
+        status: form.status || "Bekliyor",
+        created_by: data.user?.id || null,
+      };
+
+      const { row, error } = await insertTaskRow(payload);
+      if (error) {
+        flash("Görev kaydedilemedi: " + (error.message || "bilinmeyen hata"));
+        return;
+      }
+      newTasks.push(mapTask(row, data.members));
     }
 
-    const task = mapTask(row, data.members);
     try {
-      await update({ tasks: [...data.tasks, task] });
+      await update({ tasks: [...data.tasks, ...newTasks] });
     } catch {
       return;
     }
 
     setModal(false);
-    const member = data.members.find(m=>m.active);
-    setForm({
-      title:"",
-      description:"",
-      assignedId:member?.id || "",
-      due:new Date().toISOString().slice(0,10),
-      priority:"Orta",
-      status:"Bekliyor"
-    });
-
-    let phone = String(assigned.phone || "").trim();
-    try {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("phone")
-        .eq("id", assigned.id)
-        .maybeSingle();
-      if (profile?.phone) phone = String(profile.phone).trim();
-    } catch {
-      // Yerel listedeki numarayla devam et.
-    }
-
-    if (!phone) {
-      flash(`Görev oluşturuldu. ${assigned.name} için telefon yok — Üyeler'den numara ekle.`);
-      return;
-    }
-
-    const remoteBot = !import.meta.env.VITE_WHATSAPP_API_URL;
-    const whatsapp = await sendWhatsAppTaskNotification({
-      taskId: task.id,
-      phone,
-      memberName: assigned.name,
-      taskTitle: task.title,
-      description: task.description,
-      due: task.due,
-      priority: task.priority,
-    });
-
-    if (whatsapp.ok && whatsapp.queued) {
-      flash("Görev oluşturuldu. WhatsApp kopuk, mesaj kuyruğa alındı; bağlanınca gidecek.");
-    } else if (whatsapp.ok) {
-      flash("Görev oluşturuldu ve WhatsApp onay mesajı gönderildi.");
-    } else if (whatsapp.skipped) {
-      flash(`Görev oluşturuldu. ${assigned.name} için geçerli telefon yok, WhatsApp gitmedi.`);
-    } else if (remoteBot) {
-      flash("Görev kaydedildi. WhatsApp, botun çalıştığı PC'den (Supabase üzerinden) gidecek — aynı evde olması gerekmez.");
-    } else {
-      flash("Görev oluşturuldu ancak WhatsApp gitmedi: " + (whatsapp.error || "bilinmeyen hata"));
-    }
+    flash(`${newTasks.length} kişiye görev atandı.`);
   }
+
   const visibleTasks = canManage ? data.tasks.filter(t => {
     if (managedDeps === "ALL") return true;
     const assignee = data.members.find(m => String(m.id) === String(t.assigned_id));
@@ -1546,7 +1500,7 @@ function TasksPage({data,update,canManage,currentUser,flash}) {
 
   function changeStatus(id,status){update({tasks:data.tasks.map(t=>t.id===id?{...t,status}:t)});flash("Görev durumu güncellendi.");}
   function remove(id){if(!confirm("Görev silinsin mi?"))return;update({tasks:data.tasks.filter(t=>t.id!==id)});flash("Görev silindi.");}
-  return <><PageTitle title={canManage ? "Görevler" : "Görevlerim"} sub={canManage ? "Görevleri ata, durumlarını takip et ve tamamla." : "Sadece sana atanmış görevler."} action={canManage&&<button className="primary" onClick={openNew}>+ Görev Oluştur</button>}/><div className="taskCards"><div className="taskBox greenBox"><b>{visibleTasks.filter(t=>t.status==="Tamamlandı").length}</b><span>Tamamlanan</span></div><div className="taskBox orangeBox"><b>{visibleTasks.filter(t=>t.status==="Devam Ediyor").length}</b><span>Devam Eden</span></div><div className="taskBox redBox"><b>{visibleTasks.filter(t=>t.status!=="Tamamlandı"&&new Date(t.due)<new Date()).length}</b><span>Gecikmiş</span></div><div className="taskBox grayBox"><b>{visibleTasks.filter(t=>t.status==="Bekliyor").length}</b><span>Bekleyen</span></div></div><div className="panel"><div className="tableHead"><b>Görev</b><b>Sorumlu</b><b>Son Tarih</b><b>Öncelik</b><b>Durum</b><b></b></div>{visibleTasks.map(t=><div className="tableRow" key={t.id}><div><strong>{t.title}</strong><small>{t.description}</small></div><span>{t.assignee}</span><span>{t.due}</span><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><select value={t.status} onChange={e=>changeStatus(t.id,e.target.value)}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select>{canManage&&<button className="iconDanger" onClick={()=>remove(t.id)}>🗑</button>}</div>)}{!visibleTasks.length&&<Empty text="Görev bulunmuyor."/>}</div>{modal&&<Modal title="Yeni Görev" close={()=>setModal(false)}><label>Görev<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label><label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="formGrid"><label>Sorumlu<select value={form.assignedId} onChange={e=>setForm({...form,assignedId:e.target.value})}><option value="">Sorumlu seç</option>{selectableMembers.map(m=><option key={m.id} value={m.id}>{m.name}{m.phone ? "" : " (telefon yok)"}</option>)}</select></label><label>Son tarih<input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})}/></label></div><div className="formGrid"><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Düşük</option><option>Orta</option><option>Yüksek</option></select></label><label>Durum<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select></label></div><div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Oluştur</button></div></Modal>}</>;
+  return <><PageTitle title={canManage ? "Görevler" : "Görevlerim"} sub={canManage ? "Görevleri ata, durumlarını takip et ve tamamla." : "Sadece sana atanmış görevler."} action={canManage&&<button className="primary" onClick={openNew}>+ Görev Oluştur</button>}/><div className="taskCards"><div className="taskBox greenBox"><b>{visibleTasks.filter(t=>t.status==="Tamamlandı").length}</b><span>Tamamlanan</span></div><div className="taskBox orangeBox"><b>{visibleTasks.filter(t=>t.status==="Devam Ediyor").length}</b><span>Devam Eden</span></div><div className="taskBox redBox"><b>{visibleTasks.filter(t=>t.status!=="Tamamlandı"&&new Date(t.due)<new Date()).length}</b><span>Gecikmiş</span></div><div className="taskBox grayBox"><b>{visibleTasks.filter(t=>t.status==="Bekliyor").length}</b><span>Bekleyen</span></div></div><div className="panel"><div className="tableHead"><b>Görev</b><b>Sorumlu</b><b>Son Tarih</b><b>Öncelik</b><b>Durum</b><b></b></div>{visibleTasks.map(t=><div className="tableRow" key={t.id}><div><strong>{t.title}</strong><small>{t.description}</small></div><span>{t.assignee}</span><span>{t.due}</span><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><select value={t.status} onChange={e=>changeStatus(t.id,e.target.value)}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select>{canManage&&<button className="iconDanger" onClick={()=>remove(t.id)}>🗑</button>}</div>)}{!visibleTasks.length&&<Empty text="Görev bulunmuyor."/>}</div>{modal&&<Modal title="Yeni Görev" close={()=>setModal(false)}><label>Görev<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label><label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="formGrid"><label>Sorumlu (Birden fazla seçebilirsiniz)<select multiple size={4} value={form.assignedIds} onChange={e=>{ const vals = Array.from(e.target.selectedOptions, o=>o.value); setForm({...form,assignedIds:vals}); }}>{selectableMembers.map(m=><option key={m.id} value={m.id}>{m.name}{m.phone ? "" : " (telefon yok)"}</option>)}</select></label><label>Son tarih<input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})}/></label></div><div className="formGrid"><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Düşük</option><option>Orta</option><option>Yüksek</option></select></label><label>Durum<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select></label></div><div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Oluştur</button></div></Modal>}</>;
 }
 
 function WorkshopPage({ data, setData, currentUser, canManage, flash }) {
