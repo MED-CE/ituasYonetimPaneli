@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "./lib/supabase";
+import OneSignal from 'react-onesignal';
 
 const STORAGE_KEY = "ituasotonom_v1";
 const WORKSHOP_QR_TOKEN = "ITUAS-OTONOM-WORKSHOP-V1";
@@ -61,6 +62,32 @@ async function sendWhatsAppTaskNotification(payload) {
   } catch (error) {
     console.error("WhatsApp görev bildirimi gönderilemedi:", error);
     return { ok: false, error: error.message };
+  }
+}
+
+export async function sendPushNotification(title, message) {
+  const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
+  const apiKey = import.meta.env.VITE_ONESIGNAL_API_KEY;
+  if (!appId || !apiKey) return false;
+
+  try {
+    const response = await fetch("https://onesignal.com/api/v1/notifications", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Basic ${apiKey}`
+      },
+      body: JSON.stringify({
+        app_id: appId,
+        included_segments: ["Total Subscriptions"],
+        headings: { en: title, tr: title },
+        contents: { en: message, tr: message }
+      })
+    });
+    return response.ok;
+  } catch (error) {
+    console.error("OneSignal push bildirimi gönderilemedi:", error);
+    return false;
   }
 }
 
@@ -740,6 +767,23 @@ function App() {
   // Böylece ilk açılışta anon rolüyle yapılan 401/403 sorguları olmaz.
 
 
+  // OneSignal Push Bildirimlerini Başlat
+  useEffect(() => {
+    const appId = import.meta.env.VITE_ONESIGNAL_APP_ID;
+    if (appId) {
+      OneSignal.init({
+        appId: appId,
+        allowLocalhostAsSecureOrigin: true,
+        notifyButton: {
+          enable: true,
+          colors: { "circle.background": "#00b4d8" }
+        }
+      }).then(() => {
+        OneSignal.Slidedown.promptPush();
+      });
+    }
+  }, []);
+
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(""), 2600);
@@ -1202,9 +1246,9 @@ function formatEventDate(value) {
 }
 
 function CalendarPage({ data, update, canManage, currentUser, setData, flash }) {
-  const [month, setMonth] = useState(new Date(2026,7,1));
+  const [month, setMonth] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({ title:"", date:"2026-08-11", start:"18:00", end:"20:00", location:"Atölye", type:"Toplantı", description:"" });
+  const [form, setForm] = useState({ title:"", dates:[new Date().toISOString().slice(0,10)], start:"18:00", end:"20:00", location:"Atölye", type:"Toplantı", description:"" });
   const [attendanceBusy, setAttendanceBusy] = useState(false);
 
   const managedDeps = getManagedDepartments(currentUser.role);
@@ -1233,27 +1277,40 @@ function CalendarPage({ data, update, canManage, currentUser, setData, flash }) 
 
   function openNew(day=null) {
     const d = day ? `${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,"0")}-${String(day).padStart(2,"0")}` : new Date().toISOString().slice(0,10);
-    setForm({ title:"", date:d, start:"18:00", end:"20:00", location:"Atölye", type:"Toplantı", description:"" });
+    setForm({ title:"", dates:[d], start:"18:00", end:"20:00", location:"Atölye", type:"Toplantı", description:"" });
     setModal({ type:"new" });
   }
 
   async function save() {
-    if (!form.title.trim()) return;
-    const payload = eventToDb({
-      ...form,
-      id: "dummy",
-      creator: data.user?.name || "Kaptan",
-      created_by: data.user?.id || null
-    });
-    delete payload.id;
-
-    const { data: row, error } = await supabase.from("events").insert(payload).select("*").single();
-    if (error) {
-      flash("Etkinlik eklenirken hata: " + error.message);
-      return;
+    if (!form.title.trim() || !form.dates || form.dates.length === 0) return;
+    
+    let hasError = false;
+    const createdEvents = [];
+    
+    for (const d of form.dates) {
+        const payload = eventToDb({
+          ...form,
+          date: d,
+          id: "dummy",
+          creator: data.user?.name || "Kaptan",
+          created_by: data.user?.id || null
+        });
+        delete payload.id;
+        
+        const { data: row, error } = await supabase.from("events").insert(payload).select("*").single();
+        if (error) {
+          hasError = true;
+          flash("Bazı etkinlikler eklenirken hata: " + error.message);
+          continue;
+        }
+        createdEvents.push(mapEvent(row));
     }
-    update({ events:[...data.events, mapEvent(row)] });
-    setModal(null); flash("Etkinlik eklendi.");
+    
+    if (createdEvents.length > 0) {
+        update({ events:[...data.events, ...createdEvents] });
+        setModal(null);
+        flash(createdEvents.length + " etkinlik eklendi.");
+    }
   }
 
   function remove(id) {
@@ -1453,7 +1510,22 @@ function EventForm({form,setForm,save,close,canManage}) {
     }
   }, [canManage]);
 
-  return <><label>Etkinlik adı<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder={canManage ? "Örn. Robot Çalışması" : "Örn. Müsait Zamanım"}/></label><div className="formGrid"><label>Tarih<input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value})}/></label><label>Tür<select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} disabled={!canManage}>{canManage ? <><option>Toplantı</option><option>Robot Çalışması</option><option>Eğitim</option><option>Müsabaka</option><option>Etkinlik</option><option>Müsaitlik</option></> : <option>Müsaitlik</option>}</select></label></div><div className="formGrid"><label>Başlangıç<input type="time" value={form.start} onChange={e=>setForm({...form,start:e.target.value})}/></label><label>Bitiş<input type="time" value={form.end} onChange={e=>setForm({...form,end:e.target.value})}/></label></div><label>Konum<input value={form.location} onChange={e=>setForm({...form,location:e.target.value})}/></label>{canManage && <label>Kimler Görebilir? (Birden fazla seçebilirsiniz)<select multiple size={3} value={form.target_departments || ["ALL"]} onChange={e=>{ const vals = Array.from(e.target.selectedOptions, o=>o.value); setForm({...form,target_departments:vals}); }}><option value="ALL">Tümü (Herkes)</option>{departments.map(d=><option key={d} value={d}>{d}</option>)}</select></label>}<label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="modalActions"><button className="ghost" onClick={close}>Vazgeç</button><button className="primary" onClick={save}>Kaydet</button></div></>;
+  return <><label>Etkinlik adı<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder={canManage ? "Örn. Robot Çalışması" : "Örn. Müsait Zamanım"}/></label>
+  <label>Tarihler (Çoklu gün ekleyebilirsiniz)</label>
+  <div style={{display:'grid',gap:'5px',marginBottom:'12px'}}>
+    {(form.dates || []).map((d,i) => (
+      <div key={i} style={{display:'flex',gap:'5px'}}>
+        <input type="date" value={d} onChange={e=>{
+           const arr=[...(form.dates||[])]; arr[i]=e.target.value; setForm({...form, dates:arr});
+        }} />
+        {(form.dates||[]).length > 1 && <button type="button" className="danger" style={{padding:'8px 12px'}} onClick={()=>{
+           const arr=[...(form.dates||[])]; arr.splice(i,1); setForm({...form, dates:arr});
+        }}>Sil</button>}
+      </div>
+    ))}
+    <button type="button" className="ghost" style={{padding:'8px',fontSize:'11px',justifySelf:'start'}} onClick={()=>setForm({...form, dates:[...(form.dates||[]), (form.dates||[])[(form.dates||[]).length-1] || new Date().toISOString().slice(0,10)]})}>+ Başka Tarih Ekle</button>
+  </div>
+  <div className="formGrid"><label>Tür<select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} disabled={!canManage}>{canManage ? <><option>Toplantı</option><option>Robot Çalışması</option><option>Eğitim</option><option>Müsabaka</option><option>Etkinlik</option><option>Müsaitlik</option></> : <option>Müsaitlik</option>}</select></label></div><div className="formGrid"><label>Başlangıç<input type="time" value={form.start} onChange={e=>setForm({...form,start:e.target.value})}/></label><label>Bitiş<input type="time" value={form.end} onChange={e=>setForm({...form,end:e.target.value})}/></label></div><label>Konum<input value={form.location} onChange={e=>setForm({...form,location:e.target.value})}/></label>{canManage && <label>Kimler Görebilir? (Birden fazla seçebilirsiniz)<select multiple size={3} value={form.target_departments || ["ALL"]} onChange={e=>{ const vals = Array.from(e.target.selectedOptions, o=>o.value); setForm({...form,target_departments:vals}); }}><option value="ALL">Tümü (Herkes)</option>{departments.map(d=><option key={d} value={d}>{d}</option>)}</select></label>}<label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="modalActions"><button className="ghost" onClick={close}>Vazgeç</button><button className="primary" onClick={save}>Kaydet</button></div></>;
 }
 
 function AnnouncementsPage({data,update,canManage,flash}) {
@@ -1476,6 +1548,11 @@ function AnnouncementsPage({data,update,canManage,flash}) {
       flash("Duyuru eklenirken hata: " + error.message);
       return;
     }
+    
+    // OneSignal Push Bildirimi Gönder
+    sendPushNotification("📣 Yeni Duyuru: " + form.title, form.body);
+    // WhatsApp Bildirimi (Opsiyonel)
+    // sendWhatsAppTaskNotification({ title: "Yeni Duyuru", message: form.title });
     
     update({announcements:[mapAnnouncement(row), ...data.announcements]});
     setForm({title:"",body:"",priority:"Normal",pinned:false});
