@@ -434,21 +434,21 @@ async function syncCollection(table, before, after, toDb) {
           .eq("id", id);
         if (error) throw error;
       }
+    } else if (table === "tasks") {
+      for (const row of changed) {
+        const { id, ...payload } = row;
+        let error;
+        if (id) {
+          const res = await supabase.from("tasks").update(payload).eq("id", id);
+          error = res.error;
+        } else {
+          const res = await supabase.from("tasks").insert(payload);
+          error = res.error;
+        }
+        if (error) throw error;
+      }
     } else {
       let { error } = await supabase.from(table).upsert(changed);
-
-      // PostgREST bazen veritabanı değişmiş olsa bile eski schema cache'i
-      // kullanabilir. assigned_id için geçici olarak daha güvenli bir fallback.
-      if (
-        error &&
-        table === "tasks" &&
-        error.code === "PGRST204" &&
-        String(error.message || "").includes("assigned_id")
-      ) {
-        const fallback = changed.map(({ assigned_id, ...row }) => row);
-        const retry = await supabase.from(table).upsert(fallback);
-        error = retry.error;
-      }
 
       if (error) throw error;
     }
