@@ -331,12 +331,12 @@ async function insertTaskRow(payload) {
 function profileToDb(item) {
   return {
     id: item.id,
-    username: item.username || "",
+    username: item.username || null,
     full_name: item.name || "",
     role: item.role || "Üye",
-    department: item.department || "Other",
-    email: item.email || "",
-    phone: item.phone || "",
+    department: item.department || "Diğer",
+    email: item.email || null,
+    phone: item.phone || null,
     active: item.active !== false,
   };
 }
