@@ -24,7 +24,7 @@ const SUPABASE_KEY =
   process.env.SUPABASE_KEY;
 const SENT_FILE = path.join(__dirname, "whatsapp-sent.json");
 const AUTH_DIR = path.join(__dirname, "auth");
-const ANNOUNCEMENT_GROUP_NAME = process.env.WHATSAPP_ANNOUNCEMENT_GROUP_NAME || "Istanbulls";
+const ANNOUNCEMENT_GROUP_NAME = process.env.WHATSAPP_ANNOUNCEMENT_GROUP_NAME || "İTÜAS";
 let announcementGroupJid = process.env.WHATSAPP_ANNOUNCEMENT_GROUP_ID || null;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -125,7 +125,7 @@ async function findAnnouncementGroup() {
 
 function announcementMessage(announcement) {
   return [
-    `📢 *ISTANBULLS 6064 – DUYURU*`,
+    `📢 *İTÜAS OTONOM TEKNE TAKIMI – DUYURU*`,
     "",
     `📌 *${announcement.title || "Duyuru"}*`,
     announcement.body ? `\n${announcement.body}` : null,
@@ -174,7 +174,7 @@ async function watchNewAnnouncements() {
 
 function taskAssignedMessage({ memberName, taskTitle, description, due, priority }) {
   return [
-    `🤖 *Istanbulls 6064 – Yeni Görev Onayı*`,
+    `🤖 *İTÜAS Otonom Tekne Takımı – Yeni Görev Onayı*`,
     `Merhaba ${memberName || ""}!`,
     "",
     `📌 *Görev:* ${taskTitle}`,
@@ -189,7 +189,7 @@ function taskAssignedMessage({ memberName, taskTitle, description, due, priority
 
 function taskReminderMessage(memberName, task) {
   return [
-    `⏰ *Istanbulls 6064 – Görev Hatırlatması*`,
+    `⏰ *İTÜAS Otonom Tekne Takımı – Görev Hatırlatması*`,
     `Merhaba ${memberName || ""}!`,
     "",
     `Yarına ait görevin var:`,

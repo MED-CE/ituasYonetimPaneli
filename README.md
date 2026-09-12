@@ -1,16 +1,47 @@
-# React + Vite
+# İTÜAS Otonom Tekne Takımı - Yönetim Paneli
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Bu proje, İTÜAS Otonom Tekne Takımı için geliştirilmiş yönetim paneli ve atölye takip sistemidir.
 
-Currently, two official plugins are available:
+## Yerel Kurulum (Şu Anki Durum)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Projeyi bilgisayarınızda çalıştırmak için:
 
-## React Compiler
+1. Node.js'in yüklü olduğundan emin olun.
+2. Terminali projenin bulunduğu klasörde açın.
+3. Paketleri yükleyin:
+   ```bash
+   npm install
+   ```
+4. Projeyi başlatın:
+   ```bash
+   npm run dev
+   ```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+*Not: Mevcut `.env` dosyasında eski test veritabanı ayarları olabilir, şimdilik bu şekilde yerel olarak çalıştırıp tasarımları görebilirsiniz.*
 
-## Expanding the Oxlint configuration
+## Supabase (Veritabanı) Sıfırdan Kurulum Rehberi
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+Proje tam anlamıyla canlıya alınmadan önce takımınıza ait kendi Supabase veritabanınızı kurmanız gereklidir.
+
+1. **Hesap Oluşturma:**
+   - [Supabase](https://supabase.com/)'e gidin ve GitHub ile giriş yapın veya yeni bir hesap açın.
+   - Yeni bir proje oluşturun (Örn: `ituas-otonom-db`).
+
+2. **Veritabanı Şemalarını Oluşturma (SQL):**
+   - Supabase panelinizden sol menüdeki **SQL Editor** bölümüne gidin.
+   - `supabase/migrations/` klasörü içerisinde yer alan `.sql` dosyalarını sırasıyla (veya içeriklerini birleştirerek) buraya kopyalayın ve **RUN (Çalıştır)** butonuna basarak veritabanı tablolarını oluşturun.
+
+3. **.env Dosyasını Güncelleme:**
+   - Supabase sol menüsünden **Project Settings -> API** kısmına gidin.
+   - Projenizdeki `.env` dosyasını açın.
+   - Aşağıdaki satırları kendi projenizin API URL ve `anon public` key'i ile güncelleyin:
+     ```env
+     VITE_SUPABASE_URL=https://<KENDI_PROJE_ID>.supabase.co
+     VITE_SUPABASE_PUBLISHABLE_KEY=<KENDI_ANON_KEY>
+     ```
+
+4. **Kullanıcı Yetkilendirme (Authentication):**
+   - Panelden **Authentication -> Providers** menüsüne gidin.
+   - Email ile girişi aktif edebilirsiniz veya ek kurallar tanımlayabilirsiniz. (Projede muhtemelen doğrudan tablodan kullanıcı/şifre kontrolü veya supabase auth kullanılıyordur, kodlara göz atarak emin olabilirsiniz).
+
+Bu adımları tamamladıktan sonra kendi veritabanınızla, kendi takım yönetim panelinizi kullanmaya başlayabilirsiniz!

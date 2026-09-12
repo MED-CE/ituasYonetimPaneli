@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "./lib/supabase";
 
-const STORAGE_KEY = "ituasotonom_v1";
-const WORKSHOP_QR_TOKEN = "ITUAS-OTONOM-WORKSHOP-V1";
+const STORAGE_KEY = "istanbulls6064_v1";
+const WORKSHOP_QR_TOKEN = "ISTANBULLS-6064-WORKSHOP-V1";
 
 function durationText(milliseconds = 0) {
   const minutes = Math.max(0, Math.floor(milliseconds / 60000));
@@ -113,7 +113,7 @@ async function applyWhatsAppApprovals() {
 const initialData = {
   user: null,
   members: [
-    { id: 1, name: "Ali Eren", role: "Yönetici", department: "Yönetim", email: "ali@ituasotonom.com", phone: "", active: true },
+    { id: 1, name: "Ali Eren", role: "Yönetici", department: "Yönetim", email: "ali@istanbulls6064.com", phone: "", active: true },
     { id: 2, name: "Mehmet", role: "Kaptan", department: "Mechanical", email: "", phone: "", active: true },
     { id: 3, name: "Yahya", role: "Kaptan", department: "Programming", email: "", phone: "", active: true },
     { id: 4, name: "Miraç", role: "Üye", department: "Electronics", email: "", phone: "", active: true },
@@ -132,8 +132,9 @@ const initialData = {
     { id: 2, title: "Otonom kod testi", description: "Otonom rutinleri saha üzerinde test et.", assignee: "Yahya", due: "2026-08-17", priority: "Orta", status: "Devam Ediyor" },
     { id: 3, title: "Elektronik stok kontrolü", description: "Eksik parçaları listele.", assignee: "Miraç", due: "2026-08-12", priority: "Düşük", status: "Bekliyor" },
   ],
+  taskCompletionReports: [],
   settings: {
-    teamName: "İTÜAS Otonom Tekne Takımı",
+    teamName: "Istanbulls 6064",
     systemName: "Team Management System",
     motto: "Birlikte Çalış, Birlikte Başar!",
     announcementsEnabled: true,
@@ -200,17 +201,52 @@ function mapAnnouncement(row) {
 function mapTask(row, members) {
   const member = (members || []).find(m => String(m.id) === String(row.assigned_id));
   const assignedId = row.assigned_id ?? row.assigneeId ?? row.assignedTo ?? member?.id ?? null;
+  const completionReport = row.completion_report || null;
+  const assignmentMeta = row.assignment_meta || null;
+  const memberIds = Array.isArray(assignmentMeta?.member_ids) ? assignmentMeta.member_ids : (assignedId ? [assignedId] : []);
+  const memberNames = memberIds.map(id => (members || []).find(m => String(m.id) === String(id))?.name).filter(Boolean);
+  const assignee = assignmentMeta?.mode === "department"
+    ? `${assignmentMeta.department || "Departman"} Departmanı`
+    : memberNames.length ? memberNames.join(" + ") : (row.assignee || member?.name || "");
   return {
     id: row.id,
     title: row.title || "",
     description: row.description || "",
-    assignee: row.assignee || member?.name || "",
+    assignee,
     assigned_id: assignedId,
     assignedId,
     assigneeId: assignedId,
+    assigneeIds: memberIds,
     due: row.due_date || row.due || "",
     priority: row.priority || "Orta",
     status: row.status || "Bekliyor",
+    assignmentMeta,
+    completionReport,
+    created_by: row.created_by || null,
+  };
+}
+
+function taskAssignedToMember(task, member) {
+  if (!task || !member) return false;
+  const meta = task.assignmentMeta || {};
+  if (meta.mode === "department" && meta.department) return String(member.department || "") === String(meta.department);
+  if (Array.isArray(meta.member_ids) && meta.member_ids.length) return meta.member_ids.map(String).includes(String(member.id));
+  return String(task.assigned_id ?? task.assigneeId ?? task.assignedTo ?? "") === String(member.id);
+}
+
+function mapTaskCompletionReport(row) {
+  return {
+    id: row.id,
+    task_id: row.task_id,
+    completed_by: row.completed_by,
+    completed_by_name: row.completed_by_name || "",
+    work_done: row.work_done || "",
+    problems: row.problems || "",
+    solution: row.solution || "",
+    materials: row.materials || "",
+    extra_note: row.extra_note || "",
+    completed_at: row.completed_at || row.created_at || null,
+    attachments: Array.isArray(row.attachments) ? row.attachments : [],
   };
 }
 
@@ -283,6 +319,8 @@ function taskToDb(item, members) {
     status: item.status || "Bekliyor",
     created_by: item.created_by || null,
   };
+  if (item.assignmentMeta) row.assignment_meta = item.assignmentMeta;
+  if (item.completionReport) row.completion_report = item.completionReport;
   if (item.id != null && item.id !== "") row.id = item.id;
   return row;
 }
@@ -308,6 +346,14 @@ async function insertTaskRow(payload) {
     }
     if (error.code === "PGRST204" && /assignee/.test(msg) && "assignee" in current) {
       delete current.assignee;
+      continue;
+    }
+    if (error.code === "PGRST204" && /assignment_meta/.test(msg) && "assignment_meta" in current) {
+      delete current.assignment_meta;
+      continue;
+    }
+    if (error.code === "PGRST204" && /completion_report/.test(msg) && "completion_report" in current) {
+      delete current.completion_report;
       continue;
     }
     if (/null value in column ["']id["']/i.test(msg) && !current.id) {
@@ -361,6 +407,7 @@ async function fetchCloudData() {
     settings: initialData.settings,
     workshopSessions: [],
     eventAttendance: [],
+    taskCompletionReports: [],
   };
 
   const [profilesRes, eventsRes, announcementsRes, tasksRes, settingsRes, workshopRes, attendanceRes] = await Promise.all([
@@ -396,6 +443,10 @@ async function fetchCloudData() {
 
   if (!attendanceRes.error) result.eventAttendance = (attendanceRes.data || []).map(mapEventAttendance);
   else if (attendanceRes.error && attendanceRes.error.code !== "42P01") console.error("event_attendance okunamadı:", attendanceRes.error);
+
+  result.taskCompletionReports = result.tasks
+    .filter(task => task.completionReport)
+    .map(task => ({ ...task.completionReport, task_id: task.id, task }));
 
   return result;
 }
@@ -606,14 +657,14 @@ function Login({ onLogin }) {
         onSubmit={resetMode ? (e) => e.preventDefault() : submit}
       >
         <img
-          src="/ituas-logo.jpg"
+          src="/istanbulls-logo.png"
           className="loginLogo"
-          alt="İTÜAS Otonom Tekne Takımı"
+          alt="Istanbulls 6064"
         />
 
-        <div className="eyebrow">İTÜAS OTONOM</div>
+        <div className="eyebrow">TEAM 6064</div>
 
-        <h1>İTÜAS</h1>
+        <h1>ISTANBULLS</h1>
 
         <p>Takım Yönetim Sistemi</p>
 
@@ -625,7 +676,7 @@ function Login({ onLogin }) {
               <input
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                placeholder="Yerel test için 'dev' yazın"
+                placeholder="ali veya e-posta adresin"
                 autoComplete="username"
               />
             </label>
@@ -661,9 +712,9 @@ function Login({ onLogin }) {
               {loading ? "Giriş yapılıyor..." : "Giriş Yap"}
             </button>
 
-              <small className="loginHint">
-                Yerel test için e-posta kısmına "dev" yazıp rastgele bir şifreyle girebilirsiniz.
-              </small>
+            <small className="loginHint">
+              Hesabın Supabase üzerinden doğrulanır.
+            </small>
           </>
         ) : (
           <>
@@ -822,7 +873,7 @@ function App() {
     realtimeStarted.current = true;
 
     const channel = supabase
-      .channel("ituas-live-data")
+      .channel("istanbulls-live-data")
       .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, async () => {
         const { data: rows, error } = await supabase.from("profiles").select("*");
         if (!error) setData(prev => ({ ...prev, members: (rows || []).map(mapProfile) }));
@@ -941,14 +992,6 @@ function App() {
   async function login(identifier, password) {
     const value = identifier.trim().toLowerCase();
 
-    if (value === "dev") {
-      const devProfile = data.members.find(m => m.active);
-      if (devProfile) {
-        setData(prev => ({ ...prev, user: devProfile }));
-        return { success: true };
-      }
-    }
-
     if (!value || !password) {
       return { success: false, message: "Kullanıcı adı/e-posta ve şifre gir." };
     }
@@ -1005,9 +1048,9 @@ function App() {
     return () => clearInterval(timer);
   }, [currentUser]);
 
-  const canManage = role === "Yönetici" || role === "Kaptan";
+  const canManage = role === "Yönetici" || role === "Kaptan" || role === "Mentor";
   const canAdmin = role === "Yönetici";
-  const visibleMenu = canManage ? menu : menu.filter(([, label]) => !["Üyeler", "Raporlar"].includes(label));
+  const visibleMenu = canManage ? menu : menu.filter(([, label]) => label !== "Üyeler");
 
   if (!currentUser) {
     return <Login onLogin={login} />;
@@ -1017,8 +1060,8 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <img src="/ituas-logo.jpg" className="logo" alt="İTÜAS Otonom Tekne Takımı" />
-          <div><strong>İTÜAS OTONOM TEKNE TAKIMI</strong><span>Team Management</span></div>
+          <img src="/istanbulls-logo.png" className="logo" alt="Istanbulls 6064" />
+          <div><strong>ISTANBULLS 6064</strong><span>Team Management</span></div>
         </div>
 
         <nav className="nav">
@@ -1039,7 +1082,7 @@ function App() {
 
         <div className="teamQuote">
           <em>“Daha güçlü bir gelecek,<br />birlikte mümkün.”</em>
-          <small>İTÜAS Otonom Tekne Takımı</small>
+          <small>Istanbulls 6064</small>
         </div>
 
         <div className="profileCard" onClick={() => setPage("Profilim")} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") setPage("Profilim"); }}>
@@ -1051,7 +1094,7 @@ function App() {
 
       <main className="main">
         <header className="topbar">
-          <div className="mobileBrand"><img src="/ituas-logo.jpg" alt="" /></div>
+          <div className="mobileBrand"><img src="/istanbulls-logo.png" alt="" /></div>
           <div ref={searchBoxRef} className="search" style={{position:"relative", zIndex:30}}>
             <span>⌕</span>
             <input
@@ -1144,7 +1187,7 @@ function Dashboard({ data, setPage, canManage, flash }) {
   return (
     <>
       <section className="hero">
-        <div className="heroLogo"><img src="/ituas-logo.jpg" alt="" /></div>
+        <div className="heroLogo"><img src="/istanbulls-logo.png" alt="" /></div>
         <div className="heroText"><div className="eyebrow">Hoş geldin 👋</div><h1>{data.settings.teamName}</h1><strong>{data.settings.motto}</strong><p>⚙ İnovasyon &nbsp;|&nbsp; ◉ Takım Ruhu &nbsp;|&nbsp; ✦ STEM &nbsp;|&nbsp; ◇ Gelecek</p></div>
         <div className="heroSlogan">Daha<br /><b>İyi Bir Dünya</b><br />İçin<br />Mühendislik</div>
       </section>
@@ -1180,7 +1223,7 @@ function Dashboard({ data, setPage, canManage, flash }) {
           </div>
         </section>
       </div>
-      <footer>© 2026 {data.settings.teamName}. <span>{data.settings.motto} ⚓ İTÜAS</span></footer>
+      <footer>© 2026 {data.settings.teamName}. <span>{data.settings.motto} 🐂 6064</span></footer>
     </>
   );
 }
@@ -1420,117 +1463,192 @@ function AnnouncementsPage({data,update,canManage,flash}) {
 
 function TasksPage({data,update,canManage,currentUser,flash}) {
   const [modal,setModal]=useState(false);
-  const firstMember = data.members.find(m=>m.active);
+  const [completionTask,setCompletionTask]=useState(null);
+  const [reportView,setReportView]=useState(null);
+  const [reportForm,setReportForm]=useState({work_done:"",problems:"",solution:"",materials:"",extra_note:"",completedByIds:[]});
+  const [reportFiles,setReportFiles]=useState([]);
+  const [savingReport,setSavingReport]=useState(false);
+  const eligibleMembers = data.members.filter(m => m.active && m.role !== "Mentor");
+  const departments = [...new Set(eligibleMembers.map(m => m.department).filter(Boolean))];
+  const firstMember = eligibleMembers[0];
   const [form,setForm]=useState({
-    title:"",
-    description:"",
-    assignedId:firstMember?.id || "",
-    due:new Date().toISOString().slice(0,10),
-    priority:"Orta",
-    status:"Bekliyor"
+    title:"", description:"", assignmentMode:"members", assignedIds:firstMember ? [String(firstMember.id)] : [],
+    department:"", due:new Date().toISOString().slice(0,10), priority:"Orta", status:"Bekliyor"
   });
 
   function openNew(){
-    const member = data.members.find(m=>m.active);
-    setForm({
-      title:"",
-      description:"",
-      assignedId:member?.id || "",
-      due:new Date().toISOString().slice(0,10),
-      priority:"Orta",
-      status:"Bekliyor"
-    });
+    const member = eligibleMembers[0];
+    setForm({title:"",description:"",assignmentMode:"members",assignedIds:member ? [String(member.id)] : [],department:"",due:new Date().toISOString().slice(0,10),priority:"Orta",status:"Bekliyor"});
     setModal(true);
   }
 
-  async function save(){
-    if(!form.title.trim()) return;
-
-    const assigned = data.members.find(m => String(m.id) === String(form.assignedId));
-    if (!assigned) {
-      flash("Sorumlu üye seç.");
-      return;
-    }
-
-    const payload = {
-      title: form.title.trim(),
-      description: form.description || "",
-      assigned_id: assigned.id || null,
-      assignee: assigned.name || "",
-      due_date: form.due || null,
-      priority: form.priority || "Orta",
-      status: form.status || "Bekliyor",
-      created_by: data.user?.id || null,
-    };
-
-    const { row, error } = await insertTaskRow(payload);
-    if (error) {
-      flash("Görev kaydedilemedi: " + (error.message || "bilinmeyen hata"));
-      return;
-    }
-
-    const task = mapTask(row, data.members);
-    try {
-      await update({ tasks: [...data.tasks, task] });
-    } catch {
-      return;
-    }
-
-    setModal(false);
-    const member = data.members.find(m=>m.active);
-    setForm({
-      title:"",
-      description:"",
-      assignedId:member?.id || "",
-      due:new Date().toISOString().slice(0,10),
-      priority:"Orta",
-      status:"Bekliyor"
-    });
-
-    let phone = String(assigned.phone || "").trim();
-    try {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("phone")
-        .eq("id", assigned.id)
-        .maybeSingle();
-      if (profile?.phone) phone = String(profile.phone).trim();
-    } catch {
-      // Yerel listedeki numarayla devam et.
-    }
-
-    if (!phone) {
-      flash(`Görev oluşturuldu. ${assigned.name} için telefon yok — Üyeler'den numara ekle.`);
-      return;
-    }
-
-    const remoteBot = !import.meta.env.VITE_WHATSAPP_API_URL;
-    const whatsapp = await sendWhatsAppTaskNotification({
-      taskId: task.id,
-      phone,
-      memberName: assigned.name,
-      taskTitle: task.title,
-      description: task.description,
-      due: task.due,
-      priority: task.priority,
-    });
-
-    if (whatsapp.ok && whatsapp.queued) {
-      flash("Görev oluşturuldu. WhatsApp kopuk, mesaj kuyruğa alındı; bağlanınca gidecek.");
-    } else if (whatsapp.ok) {
-      flash("Görev oluşturuldu ve WhatsApp onay mesajı gönderildi.");
-    } else if (whatsapp.skipped) {
-      flash(`Görev oluşturuldu. ${assigned.name} için geçerli telefon yok, WhatsApp gitmedi.`);
-    } else if (remoteBot) {
-      flash("Görev kaydedildi. WhatsApp, botun çalıştığı PC'den (Supabase üzerinden) gidecek — aynı evde olması gerekmez.");
-    } else {
-      flash("Görev oluşturuldu ancak WhatsApp gitmedi: " + (whatsapp.error || "bilinmeyen hata"));
-    }
+  function toggleAssignee(id){
+    const key=String(id);
+    setForm(prev=>({...prev,assignedIds:prev.assignedIds.includes(key)?prev.assignedIds.filter(x=>x!==key):[...prev.assignedIds,key]}));
   }
-  const visibleTasks = canManage ? data.tasks : data.tasks.filter(t => String(t.assigned_id) === String(currentUser.id));
-  function changeStatus(id,status){update({tasks:data.tasks.map(t=>t.id===id?{...t,status}:t)});flash("Görev durumu güncellendi.");}
-  function remove(id){if(!confirm("Görev silinsin mi?"))return;update({tasks:data.tasks.filter(t=>t.id!==id)});flash("Görev silindi.");}
-  return <><PageTitle title={canManage ? "Görevler" : "Görevlerim"} sub={canManage ? "Görevleri ata, durumlarını takip et ve tamamla." : "Sadece sana atanmış görevler."} action={canManage&&<button className="primary" onClick={openNew}>+ Görev Oluştur</button>}/><div className="taskCards"><div className="taskBox greenBox"><b>{visibleTasks.filter(t=>t.status==="Tamamlandı").length}</b><span>Tamamlanan</span></div><div className="taskBox orangeBox"><b>{visibleTasks.filter(t=>t.status==="Devam Ediyor").length}</b><span>Devam Eden</span></div><div className="taskBox redBox"><b>{visibleTasks.filter(t=>t.status!=="Tamamlandı"&&new Date(t.due)<new Date()).length}</b><span>Gecikmiş</span></div><div className="taskBox grayBox"><b>{visibleTasks.filter(t=>t.status==="Bekliyor").length}</b><span>Bekleyen</span></div></div><div className="panel"><div className="tableHead"><b>Görev</b><b>Sorumlu</b><b>Son Tarih</b><b>Öncelik</b><b>Durum</b><b></b></div>{visibleTasks.map(t=><div className="tableRow" key={t.id}><div><strong>{t.title}</strong><small>{t.description}</small></div><span>{t.assignee}</span><span>{t.due}</span><span className={`priority ${t.priority.toLowerCase()}`}>{t.priority}</span><select value={t.status} onChange={e=>changeStatus(t.id,e.target.value)}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select>{canManage&&<button className="iconDanger" onClick={()=>remove(t.id)}>🗑</button>}</div>)}{!visibleTasks.length&&<Empty text="Görev bulunmuyor."/>}</div>{modal&&<Modal title="Yeni Görev" close={()=>setModal(false)}><label>Görev<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label><label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label><div className="formGrid"><label>Sorumlu<select value={form.assignedId} onChange={e=>setForm({...form,assignedId:e.target.value})}><option value="">Sorumlu seç</option>{data.members.filter(m=>m.active).map(m=><option key={m.id} value={m.id}>{m.name}{m.phone ? "" : " (telefon yok)"}</option>)}</select></label><label>Son tarih<input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})}/></label></div><div className="formGrid"><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Düşük</option><option>Orta</option><option>Yüksek</option></select></label><label>Durum<select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select></label></div><div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Oluştur</button></div></Modal>}</>;
+
+  async function save(){
+    if(!form.title.trim()) { flash("Görev adı gir."); return; }
+    let targets=[];
+    if(form.assignmentMode==="department"){
+      if(!form.department){ flash("Departman seç."); return; }
+      targets=eligibleMembers.filter(m=>String(m.department)===String(form.department));
+      if(!targets.length){ flash("Bu departmanda aktif üye bulunamadı."); return; }
+    }else{
+      targets=eligibleMembers.filter(m=>form.assignedIds.includes(String(m.id)));
+      if(!targets.length){ flash("En az bir sorumlu üye seç."); return; }
+    }
+    const first=targets[0];
+    const assignmentMeta={
+      mode:form.assignmentMode,
+      member_ids:targets.map(m=>m.id),
+      department:form.assignmentMode==="department"?form.department:null,
+    };
+    const payload={
+      title:form.title.trim(), description:form.description||"", assigned_id:first?.id||null,
+      assignee:form.assignmentMode==="department"?`${form.department} Departmanı`:targets.map(m=>m.name).join(" + "),
+      due_date:form.due||null, priority:form.priority||"Orta", status:form.status||"Bekliyor",
+      created_by:data.user?.id||null, assignment_meta:assignmentMeta,
+    };
+    const {row,error}=await insertTaskRow(payload);
+    if(error){flash("Görev kaydedilemedi: "+(error.message||"bilinmeyen hata"));return;}
+    const task=mapTask(row,data.members);
+    await update({tasks:[...data.tasks,task]});
+    setModal(false);
+    setForm({title:"",description:"",assignmentMode:"members",assignedIds:firstMember?[String(firstMember.id)]:[],department:"",due:new Date().toISOString().slice(0,10),priority:"Orta",status:"Bekliyor"});
+
+    let sent=0;
+    for(const assigned of targets){
+      let phone=String(assigned.phone||"").trim();
+      try{
+        const {data:profile}=await supabase.from("profiles").select("phone").eq("id",assigned.id).maybeSingle();
+        if(profile?.phone) phone=String(profile.phone).trim();
+      }catch{}
+      if(!phone) continue;
+      const whatsapp=await sendWhatsAppTaskNotification({taskId:task.id,phone,memberName:assigned.name,taskTitle:task.title,description:task.description,due:task.due,priority:task.priority});
+      if(whatsapp.ok) sent++;
+    }
+    flash(`Görev oluşturuldu. ${targets.length} kişi${form.assignmentMode==="department"?` (${form.department})`:""} hedeflendi${sent?`, ${sent} WhatsApp bildirimi gönderildi`:""}.`);
+  }
+
+  function taskTargets(task){
+    const meta=task.assignmentMeta||{};
+    if(meta.mode==="department"&&meta.department) return eligibleMembers.filter(m=>String(m.department)===String(meta.department));
+    if(Array.isArray(meta.member_ids)&&meta.member_ids.length) return eligibleMembers.filter(m=>meta.member_ids.map(String).includes(String(m.id)));
+    if(task.assigned_id) return eligibleMembers.filter(m=>String(m.id)===String(task.assigned_id));
+    return [];
+  }
+
+  const visibleTasks=canManage?data.tasks:data.tasks.filter(t=>taskTargets(t).some(m=>String(m.id)===String(currentUser.id)));
+  const reports=data.tasks.filter(t=>t.completionReport).map(t=>({...t.completionReport,task_id:t.id,task:t}));
+  const reportForTask=taskId=>{
+    const task=data.tasks.find(t=>String(t.id)===String(taskId));
+    return task?.completionReport ? {...task.completionReport,task_id:task.id,task} : null;
+  };
+
+  function openCompletion(task){
+    const targets=taskTargets(task);
+    const defaultIds=targets.some(m=>String(m.id)===String(currentUser.id))?[String(currentUser.id)]:targets.slice(0,1).map(m=>String(m.id));
+    setCompletionTask(task);
+    setReportForm({work_done:"",problems:"",solution:"",materials:"",extra_note:"",completedByIds:defaultIds});
+    setReportFiles([]);
+  }
+
+  function toggleReportMaker(id){
+    const key=String(id);
+    setReportForm(prev=>({...prev,completedByIds:prev.completedByIds.includes(key)?prev.completedByIds.filter(x=>x!==key):[...prev.completedByIds,key]}));
+  }
+
+  function changeStatus(id,status){
+    const task=data.tasks.find(t=>String(t.id)===String(id));
+    if(!task)return;
+    if(status==="Tamamlandı"&&task.status!=="Tamamlandı"){openCompletion(task);return;}
+    update({tasks:data.tasks.map(t=>String(t.id)===String(id)?{...t,status}:t)});
+    flash("Görev durumu güncellendi.");
+  }
+
+  async function saveCompletionReport(){
+    if(!completionTask||!reportForm.work_done.trim()){flash("Yapılan iş alanını doldur.");return;}
+    if(!reportForm.completedByIds.length){flash("En az bir işi yapan kişi seç.");return;}
+    setSavingReport(true);
+    const uploaded=[];
+    try{
+      if(completionTask.completionReport) throw new Error("Bu görev için zaten bir tamamlama raporu var.");
+      const makers=taskTargets(completionTask).filter(m=>reportForm.completedByIds.map(String).includes(String(m.id)));
+      if(!makers.length) throw new Error("İşi yapan kişi seçimi geçersiz.");
+      const completedAt=new Date().toISOString();
+      const attachments=[];
+      for(const file of reportFiles){
+        const safeName=file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+        const path=`${String(completionTask.id)}/${Date.now()}-${crypto.randomUUID()}-${safeName}`;
+        const {error:uploadError}=await supabase.storage.from("task-completion-attachments").upload(path,file,{upsert:false});
+        if(uploadError)throw uploadError;
+        uploaded.push(path);
+        const {data:publicData}=supabase.storage.from("task-completion-attachments").getPublicUrl(path);
+        attachments.push({id:crypto.randomUUID(),file_name:file.name,file_url:publicData?.publicUrl||path,storage_path:path,mime_type:file.type||null});
+      }
+      const completionReport={
+        work_done:reportForm.work_done.trim(),problems:reportForm.problems.trim()||null,solution:reportForm.solution.trim()||null,
+        materials:reportForm.materials.trim()||null,extra_note:reportForm.extra_note.trim()||null,
+        completed_by:makers[0].id,completed_by_name:makers[0].name,
+        completed_by_ids:makers.map(m=>m.id),completed_by_names:makers.map(m=>m.name),completed_at:completedAt,attachments
+      };
+      const {error:taskError}=await supabase.from("tasks").update({status:"Tamamlandı",completion_report:completionReport}).eq("id",completionTask.id);
+      if(taskError)throw taskError;
+      await update({tasks:data.tasks.map(t=>String(t.id)===String(completionTask.id)?{...t,status:"Tamamlandı",completionReport}:t)});
+      setCompletionTask(null);
+      flash("Görev tamamlandı ve rapor kaydedildi.");
+    }catch(error){
+      console.error("Görev tamamlama raporu:",error);
+      for(const path of uploaded)await supabase.storage.from("task-completion-attachments").remove([path]).catch(()=>{});
+      flash("Rapor kaydedilemedi: "+(error?.message||"bilinmeyen hata"));
+    }finally{setSavingReport(false);}
+  }
+
+  function openReport(task){
+    const report=reportForTask(task.id);
+    if(!report){flash("Bu görev için rapor bulunamadı.");return;}
+    setReportView(report);
+  }
+
+  function remove(id){if(!canManage)return;if(!confirm("Görev silinsin mi?"))return;update({tasks:data.tasks.filter(t=>String(t.id)!==String(id))});flash("Görev silindi.");}
+
+  return <>
+    <PageTitle title={canManage?"Görevler":"Görevlerim"} sub={canManage?"Görevleri kişilere veya departmanlara ata, durumlarını takip et ve raporları arşivle.":"Sana veya departmanına atanmış görevler."} action={canManage&&<button className="primary" onClick={openNew}>+ Görev Oluştur</button>}/>
+    <div className="taskCards"><div className="taskBox greenBox"><b>{visibleTasks.filter(t=>t.status==="Tamamlandı").length}</b><span>Tamamlanan</span></div><div className="taskBox orangeBox"><b>{visibleTasks.filter(t=>t.status==="Devam Ediyor").length}</b><span>Devam Eden</span></div><div className="taskBox redBox"><b>{visibleTasks.filter(t=>t.status!=="Tamamlandı"&&t.due&&new Date(`${t.due}T23:59:59`)<new Date()).length}</b><span>Gecikmiş</span></div><div className="taskBox grayBox"><b>{visibleTasks.filter(t=>t.status==="Bekliyor").length}</b><span>Bekleyen</span></div></div>
+    <div className="panel"><div className="tableHead"><b>Görev</b><b>Sorumlu</b><b>Son Tarih</b><b>Öncelik</b><b>Durum</b><b></b></div>
+      {visibleTasks.map(t=>{const report=reportForTask(t.id);return <div className="tableRow" key={t.id}>
+        <div><strong>{t.title}</strong><small>{t.description}</small></div><span>{t.assignee||"—"}</span><span>{t.due||"—"}</span><span className={`priority ${String(t.priority||"").toLowerCase()}`}>{t.priority}</span>
+        <div className="taskStatusCell">{t.status==="Tamamlandı"?<><span className="statusDone">✓ Tamamlandı</span>{report&&<button className="ghost smallButton" onClick={()=>openReport(t)}>📄 Raporu Gör</button>}</>:<select value={t.status} onChange={e=>changeStatus(t.id,e.target.value)}><option>Bekliyor</option><option>Devam Ediyor</option><option>Tamamlandı</option></select>}</div>
+        {canManage&&<button className="iconDanger" onClick={()=>remove(t.id)}>🗑</button>}
+      </div>})}{!visibleTasks.length&&<Empty text="Görev bulunmuyor."/>}
+    </div>
+
+    {modal&&<Modal title="Yeni Görev" close={()=>setModal(false)}>
+      <label>Görev<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})} placeholder="Örn. Robot kolu montajı"/></label>
+      <label>Açıklama<textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/></label>
+      <div className="assignmentSwitch"><button type="button" className={form.assignmentMode==="members"?"active":""} onClick={()=>setForm({...form,assignmentMode:"members"})}>👤 Kişilere Ata</button><button type="button" className={form.assignmentMode==="department"?"active":""} onClick={()=>setForm({...form,assignmentMode:"department"})}>🏢 Departmana Ata</button></div>
+      {form.assignmentMode==="members"?<div className="memberPicker"><label>Atanacak Üyeler <small>(birden fazla seçebilirsin)</small></label><div className="memberPickerGrid">{eligibleMembers.map(m=><button type="button" key={m.id} className={`memberPickCard ${form.assignedIds.includes(String(m.id))?"selected":""}`} onClick={()=>toggleAssignee(m.id)}><span className="avatar small">{m.name?.[0]||"?"}</span><span><b>{m.name}</b><small>{m.department||"Bölüm yok"}</small></span><i>{form.assignedIds.includes(String(m.id))?"✓":"+"}</i></button>)}</div></div>:<label>Departman<select value={form.department} onChange={e=>setForm({...form,department:e.target.value})}><option value="">Departman seç</option>{departments.map(d=><option key={d} value={d}>{d}</option>)}</select></label>}
+      <div className="formGrid"><label>Son tarih<input type="date" value={form.due} onChange={e=>setForm({...form,due:e.target.value})}/></label><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Düşük</option><option>Orta</option><option>Yüksek</option></select></label></div>
+      <div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Oluştur</button></div>
+    </Modal>}
+
+    {completionTask&&<Modal title="📄 Görev Tamamlama Raporu" close={()=>!savingReport&&setCompletionTask(null)}>
+      <div className="completionIntro"><strong>{completionTask.title}</strong><span>Görevi tamamlamadan önce yapılan çalışmayı detaylı şekilde raporla.</span></div>
+      <label>İşi Yapanlar <span className="requiredMark">*</span></label>
+      <div className="memberPickerGrid reportMakerGrid">{taskTargets(completionTask).map(m=><button type="button" key={m.id} className={`memberPickCard ${reportForm.completedByIds.includes(String(m.id))?"selected":""}`} onClick={()=>toggleReportMaker(m.id)}><span className="avatar small">{m.name?.[0]||"?"}</span><span><b>{m.name}</b><small>{m.department||"Bölüm yok"}</small></span><i>{reportForm.completedByIds.includes(String(m.id))?"✓":"+"}</i></button>)}</div>
+      <label>Yapılan İş <span className="requiredMark">*</span><textarea className="reportTextarea" value={reportForm.work_done} onChange={e=>setReportForm({...reportForm,work_done:e.target.value})} placeholder="Neler yaptınız? Hangi işlemleri tamamladınız? Test sonucu ne oldu?"/></label>
+      <label>Karşılaşılan Sorunlar<textarea className="reportTextarea" value={reportForm.problems} onChange={e=>setReportForm({...reportForm,problems:e.target.value})}/></label>
+      <label>Nasıl Çözüldü?<textarea className="reportTextarea" value={reportForm.solution} onChange={e=>setReportForm({...reportForm,solution:e.target.value})}/></label>
+      <label>Kullanılan Malzemeler / Parçalar<textarea className="reportTextarea" value={reportForm.materials} onChange={e=>setReportForm({...reportForm,materials:e.target.value})}/></label>
+      <label>Ek Not<textarea className="reportTextarea" value={reportForm.extra_note} onChange={e=>setReportForm({...reportForm,extra_note:e.target.value})}/></label>
+      <label>Fotoğraf / Dosya Ekle<input type="file" multiple onChange={e=>setReportFiles(Array.from(e.target.files||[]))}/>{reportFiles.length>0&&<div className="fileList">{reportFiles.map((file,i)=><span key={`${file.name}-${i}`}>📎 {file.name}</span>)}</div>}</label>
+      <div className="reportAuthor"><span>👥 İşi yapan</span><b>{taskTargets(completionTask).filter(m=>reportForm.completedByIds.includes(String(m.id))).map(m=>m.name).join(" + ")||"Seçilmedi"}</b><small>🕐 Tamamlanma zamanı otomatik kaydedilir.</small></div>
+      <div className="modalActions"><button className="ghost" disabled={savingReport} onClick={()=>setCompletionTask(null)}>Vazgeç</button><button className="primary" disabled={savingReport} onClick={saveCompletionReport}>{savingReport?"Kaydediliyor...":"Kaydet ve Görevi Tamamla"}</button></div>
+    </Modal>}
+
+    {reportView&&<Modal title="📄 Görev Tamamlanma Raporu" close={()=>setReportView(null)}><div className="reportDocument"><div className="reportDocumentHead"><div><small>GÖREV TAMAMLANMA RAPORU</small><h2>{reportView.task?.title||"Görev"}</h2></div><span>✓ Tamamlandı</span></div><div className="reportMeta"><div><small>İşi Yapanlar</small><b>{(reportView.completed_by_names||[reportView.completed_by_name]).filter(Boolean).join(" + ")||"—"}</b></div><div><small>Tamamlanma zamanı</small><b>{reportView.completed_at?new Date(reportView.completed_at).toLocaleString("tr-TR"):"—"}</b></div></div><div className="reportSection"><h3>Atama</h3><p>{reportView.task?.assignmentMeta?.mode==="department"?`${reportView.task.assignmentMeta.department} Departmanı`:reportView.task?.assignee||"—"}</p></div><div className="reportSection"><h3>Yapılan İş</h3><p>{reportView.work_done||"—"}</p></div><div className="reportSection"><h3>Karşılaşılan Sorunlar</h3><p>{reportView.problems||"Sorun belirtilmemiş."}</p></div><div className="reportSection"><h3>Çözüm</h3><p>{reportView.solution||"—"}</p></div><div className="reportSection"><h3>Kullanılan Malzemeler / Parçalar</h3><p>{reportView.materials||"—"}</p></div><div className="reportSection"><h3>Ek Not</h3><p>{reportView.extra_note||"—"}</p></div>{reportView.attachments?.length>0&&<div className="reportSection"><h3>Ekler</h3><div className="reportAttachments">{reportView.attachments.map(a=><a key={a.id} href={a.file_url} target="_blank" rel="noreferrer">📎 {a.file_name}</a>)}</div></div>}</div></Modal>}
+  </>;
 }
 
 function WorkshopPage({ data, setData, currentUser, canManage, flash }) {
@@ -1539,7 +1657,7 @@ function WorkshopPage({ data, setData, currentUser, canManage, flash }) {
   const ownSessions = data.workshopSessions.filter(s => String(s.member_id) === String(currentUser.id));
   const openSession = ownSessions.find(s => !s.check_out);
   const totals = workshopTotals(ownSessions, now);
-  const ownTasks = data.tasks.filter(t => String(t.assigned_id) === String(currentUser.id));
+  const ownTasks = data.tasks.filter(t => taskAssignedToMember(t, currentUser));
   const overdue = ownTasks.filter(t => t.status !== "Tamamlandı" && t.due && new Date(`${t.due}T23:59:59`) < now);
   const qrUrl = `${window.location.origin}${window.location.pathname}?workshop=${WORKSHOP_QR_TOKEN}`;
 
@@ -1599,10 +1717,85 @@ function WorkshopPage({ data, setData, currentUser, canManage, flash }) {
     <div className="statsGrid workshopStats"><StatCard icon="◷" title="Bugün" value={durationText(totals.today)} sub="Atölye süresi" tone="orange"/><StatCard icon="▤" title="Bu Hafta" value={durationText(totals.week)} sub="Pazartesiden beri" tone="purple"/><StatCard icon="▥" title="Bu Ay" value={durationText(totals.month)} sub="Bu ayki toplam" tone="green"/><StatCard icon="⌁" title="Toplam" value={durationText(totals.total)} sub={`${ownSessions.length} ziyaret`} tone="blue"/></div>
     <div className="twoCol workshopGrid"><section className="panel"><div className="panelHeader"><h2><span>✓</span>İşlerim</h2></div>{ownTasks.length ? ownTasks.map(task => <div className="workshopRow" key={task.id}><div><strong>{task.title}</strong><small>{task.due ? `Son tarih: ${task.due}` : "Son tarih yok"}</small></div><span className={task.status === "Tamamlandı" ? "statusDone" : overdue.includes(task) ? "statusLate" : "statusOpen"}>{task.status === "Tamamlandı" ? "Tamamlandı" : overdue.includes(task) ? "Gecikmiş" : task.status}</span></div>) : <Empty text="Sana atanmış görev yok."/>}</section>
       <section className="panel"><div className="panelHeader"><h2><span>◷</span>Giriş-Çıkış Geçmişim</h2></div>{ownSessions.length ? ownSessions.slice(0, 8).map(session => <div className="workshopRow" key={session.id}><div><strong>{new Date(session.check_in).toLocaleDateString("tr-TR")}</strong><small>Giriş: {new Date(session.check_in).toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"})} · Çıkış: {session.check_out ? new Date(session.check_out).toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"}) : "Devam ediyor"}</small></div><b>{durationText(sessionDuration(session, now))}</b></div>) : <Empty text="Henüz atölye kaydın yok."/>}</section></div>
-    {canManage && <><div className="pageTitle compact"><div><h1>Yönetici görünümü</h1><p>Atölyedeki üyeler ve en son hareketler.</p></div><button className="ghost" onClick={() => navigator.clipboard?.writeText(qrUrl).then(() => flash("Atölye QR bağlantısı kopyalandı."))}>QR Bağlantısını Kopyala</button></div><section className="panel workshopQr"><img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrUrl)}`} alt="İTÜAS atölye giriş çıkış QR kodu"/><div><h2>Atölye QR Kodu</h2><p>Bu kodu yazdırıp atölye girişine as. Üye, kendi hesabıyla kodu okuttuğunda giriş yapar; açık oturumu varsa çıkışı kaydedilir.</p><small>QR yalnızca atölye bağlantısını taşır; kayıt her zaman oturum açmış üyeye yazılır.</small></div></section><div className="twoCol workshopGrid"><section className="panel"><div className="panelHeader"><h2><span>●</span>Şu An Atölyede ({activeMembers.length})</h2></div>{activeMembers.length ? activeMembers.map(member => { const session = data.workshopSessions.find(s => String(s.member_id) === String(member.id) && !s.check_out); return <div className="workshopRow" key={member.id}><div><strong>{member.name}</strong><small>{member.department} · Giriş: {new Date(session.check_in).toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"})}</small></div><b>{durationText(sessionDuration(session, now))}</b></div>; }) : <Empty text="Şu anda atölyede kimse yok."/>}</section><section className="panel"><div className="panelHeader"><h2><span>▤</span>Tüm Son Kayıtlar</h2></div>{sessionsForAdmin.length ? sessionsForAdmin.map(session => <div className="workshopRow" key={session.id}><div><strong>{memberName(session.member_id)}</strong><small>{new Date(session.check_in).toLocaleString("tr-TR")} {session.check_out ? `→ ${new Date(session.check_out).toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"})}` : "· İçeride"}</small></div><b>{durationText(sessionDuration(session, now))}</b></div>) : <Empty text="Atölye kaydı yok."/>}</section></div></>}
+    {canManage && <><div className="pageTitle compact"><div><h1>Yönetici görünümü</h1><p>Atölyedeki üyeler ve en son hareketler.</p></div><button className="ghost" onClick={() => navigator.clipboard?.writeText(qrUrl).then(() => flash("Atölye QR bağlantısı kopyalandı."))}>QR Bağlantısını Kopyala</button></div><section className="panel workshopQr"><img src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(qrUrl)}`} alt="Istanbulls atölye giriş çıkış QR kodu"/><div><h2>Atölye QR Kodu</h2><p>Bu kodu yazdırıp atölye girişine as. Üye, kendi hesabıyla kodu okuttuğunda giriş yapar; açık oturumu varsa çıkışı kaydedilir.</p><small>QR yalnızca atölye bağlantısını taşır; kayıt her zaman oturum açmış üyeye yazılır.</small></div></section><div className="twoCol workshopGrid"><section className="panel"><div className="panelHeader"><h2><span>●</span>Şu An Atölyede ({activeMembers.length})</h2></div>{activeMembers.length ? activeMembers.map(member => { const session = data.workshopSessions.find(s => String(s.member_id) === String(member.id) && !s.check_out); return <div className="workshopRow" key={member.id}><div><strong>{member.name}</strong><small>{member.department} · Giriş: {new Date(session.check_in).toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"})}</small></div><b>{durationText(sessionDuration(session, now))}</b></div>; }) : <Empty text="Şu anda atölyede kimse yok."/>}</section><section className="panel"><div className="panelHeader"><h2><span>▤</span>Tüm Son Kayıtlar</h2></div>{sessionsForAdmin.length ? sessionsForAdmin.map(session => <div className="workshopRow" key={session.id}><div><strong>{memberName(session.member_id)}</strong><small>{new Date(session.check_in).toLocaleString("tr-TR")} {session.check_out ? `→ ${new Date(session.check_out).toLocaleTimeString("tr-TR", {hour:"2-digit", minute:"2-digit"})}` : "· İçeride"}</small></div><b>{durationText(sessionDuration(session, now))}</b></div>) : <Empty text="Atölye kaydı yok."/>}</section></div></>}
   </>;
 }
 
+
+
+function xpForMember(member, data) {
+  const id = String(member?.id ?? "");
+  const tasks = (data.tasks || []).filter(t => taskAssignedToMember(t, member));
+  const completed = tasks.filter(t => t.status === "Tamamlandı");
+  const reports = (data.taskCompletionReports || []).filter(r => {
+    const ids = Array.isArray(r.completed_by_ids) ? r.completed_by_ids : (r.completed_by ? [r.completed_by] : []);
+    return ids.map(String).includes(id);
+  });
+  const sessions = (data.workshopSessions || []).filter(s => String(s.member_id ?? s.memberId ?? s.user_id ?? "") === id);
+  const attendance = (data.eventAttendance || []).filter(a => String(a.memberId ?? a.member_id ?? "") === id);
+  const actual = attendance.filter(a => (a.actualStatus ?? a.actual_status) === "geldi");
+  const taskXp = completed.length * 50;
+  const reportXp = reports.length * 25;
+  const workshopXp = Math.floor(workshopTotals(sessions, new Date()).total / 3600000) * 10;
+  const attendanceXp = actual.length * 15;
+  return taskXp + reportXp + workshopXp + attendanceXp;
+}
+
+function xpLevelInfo(xp) {
+  const level = Math.floor(xp / 250) + 1;
+  const current = xp % 250;
+  const next = 250;
+  const pct = Math.min(100, Math.round((current / next) * 100));
+  return { level, current, next, pct };
+}
+
+
+const XP_BADGES = [
+  {id:"first-task", icon:"⚡", name:"İlk Adım", desc:"İlk görevi tamamla", xp:50, ok:s=>s.completed>=1},
+  {id:"task-5", icon:"🎯", name:"İşi Sıkı Tut", desc:"5 görev tamamla", xp:100, ok:s=>s.completed>=5},
+  {id:"task-10", icon:"🏆", name:"Görev Ustası", desc:"10 görev tamamla", xp:150, ok:s=>s.completed>=10},
+  {id:"task-25", icon:"👑", name:"Görev Efsanesi", desc:"25 görev tamamla", xp:250, ok:s=>s.completed>=25},
+  {id:"report-1", icon:"📄", name:"İlk Rapor", desc:"İlk tamamlanma raporunu gönder", xp:50, ok:s=>s.reports>=1},
+  {id:"report-5", icon:"📝", name:"Raporcu", desc:"5 tamamlanma raporu", xp:100, ok:s=>s.reports>=5},
+  {id:"report-10", icon:"📚", name:"Arşivci", desc:"10 tamamlanma raporu", xp:200, ok:s=>s.reports>=10},
+  {id:"workshop-1", icon:"🔧", name:"Atölye İnsanı", desc:"Atölyede ilk kaydını oluştur", xp:50, ok:s=>s.sessions>=1},
+  {id:"workshop-10", icon:"🛠️", name:"Atölye Müdavimi", desc:"10 atölye oturumu", xp:100, ok:s=>s.sessions>=10},
+  {id:"hours-10", icon:"⏱️", name:"10 Saat", desc:"Atölyede 10 saat geçir", xp:150, ok:s=>s.workshopHours>=10},
+  {id:"hours-25", icon:"🔥", name:"Atölye Bağımlısı", desc:"Atölyede 25 saat geçir", xp:250, ok:s=>s.workshopHours>=25},
+  {id:"event-1", icon:"📅", name:"Takım Ruhu", desc:"İlk etkinliğine katıl", xp:50, ok:s=>s.actualPresent>=1},
+  {id:"event-5", icon:"🤝", name:"Takım Oyuncusu", desc:"5 gerçek etkinlik katılımı", xp:100, ok:s=>s.actualPresent>=5},
+  {id:"event-10", icon:"🌟", name:"Aktif Üye", desc:"10 gerçek etkinlik katılımı", xp:200, ok:s=>s.actualPresent>=10},
+  {id:"xp-250", icon:"🥉", name:"Seviye Atlama", desc:"250 XP kazan", xp:50, ok:s=>s.xp>=250},
+  {id:"xp-500", icon:"🥈", name:"Güçleniyor", desc:"500 XP kazan", xp:100, ok:s=>s.xp>=500},
+  {id:"xp-1000", icon:"🥇", name:"1000 XP", desc:"1000 XP kazan", xp:200, ok:s=>s.xp>=1000},
+  {id:"level-5", icon:"🚀", name:"Yükseliş", desc:"5. seviyeye ulaş", xp:150, ok:s=>s.level>=5},
+  {id:"level-10", icon:"💎", name:"Uzman", desc:"10. seviyeye ulaş", xp:300, ok:s=>s.level>=10},
+  {id:"hidden", icon:"🔒", name:"Gizli Rozet", desc:"???", xp:0, ok:s=>s.completed>=50 && s.reports>=20 && s.actualPresent>=20},
+];
+
+function memberXpStats(member, data) {
+  const tasks = (data.tasks || []).filter(t => taskAssignedToMember(t, member));
+  const completed = tasks.filter(t => t.status === "Tamamlandı").length;
+  const reports = (data.tasks || []).filter(t => taskAssignedToMember(t, member) && t.completionReport).length;
+  const sessions = (data.workshopSessions || []).filter(s => String(s.member_id ?? s.memberId ?? s.user_id ?? "") === String(member?.id ?? ""));
+  const workshopHours = workshopTotals(sessions, new Date()).total / 3600000;
+  const actualPresent = (data.eventAttendance || []).filter(a => String(a.memberId ?? a.member_id ?? "") === String(member?.id ?? "") && (a.actualStatus ?? a.actual_status) === "geldi").length;
+  const xp = xpForMember(member, data);
+  return {completed, reports, sessions:sessions.length, workshopHours, actualPresent, xp, level:xpLevelInfo(xp).level};
+}
+
+function memberXpHistory(member, data) {
+  const id = String(member?.id ?? "");
+  const rows = [];
+  (data.tasks || []).filter(t => taskAssignedToMember(t, member) && t.status === "Tamamlandı").forEach(t => rows.push({date:t.completed_at || t.updated_at || t.created_at || null, label:`Görev tamamlandı: ${t.title}`, xp:50}));
+  (data.tasks || []).filter(t => taskAssignedToMember(t, member) && t.completionReport).forEach(t => rows.push({date:t.completionReport.completed_at || null, label:`Rapor: ${t.title}`, xp:25}));
+  (data.workshopSessions || []).filter(s => String(s.member_id ?? s.memberId ?? s.user_id ?? "") === id).forEach(s => {
+    const hours=Math.floor(sessionDuration(s,new Date())/3600000);
+    if(hours>0) rows.push({date:s.check_out || s.check_in || null, label:"Atölye süresi", xp:hours*10});
+  });
+  (data.eventAttendance || []).filter(a => String(a.memberId ?? a.member_id ?? "") === id && (a.actualStatus ?? a.actual_status) === "geldi").forEach(a => rows.push({date:a.updated_at || a.created_at || null, label:"Etkinlik katılımı", xp:15}));
+  return rows.sort((a,b)=>new Date(b.date||0)-new Date(a.date||0));
+}
 
 function ProfilePage({data, update, currentUser, flash, setPage}) {
   const member = data.members.find(m => String(m.id) === String(currentUser?.id)) || currentUser || {};
@@ -1624,9 +1817,7 @@ function ProfilePage({data, update, currentUser, flash, setPage}) {
 
   const initials = (member.name || "Ü").trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
 
-  const myTasks = data.tasks.filter(task =>
-    String(task.assigneeId ?? task.assignee_id ?? task.assignedTo ?? "") === String(member.id)
-  );
+  const myTasks = data.tasks.filter(task => taskAssignedToMember(task, member));
   const completedTasks = myTasks.filter(task => task.status === "Tamamlandı").length;
   const openTasks = myTasks.filter(task => task.status !== "Tamamlandı").length;
   const overdueTasks = myTasks.filter(task => {
@@ -1730,7 +1921,7 @@ function ProfilePage({data, update, currentUser, flash, setPage}) {
           </div>
 
           <div style={{flex:1, minWidth:240}}>
-            <div className="eyebrow">İTÜAS OTONOM TEKNE TAKIMI</div>
+            <div className="eyebrow">ISTANBULLS 6064</div>
             <h2 style={{margin:"5px 0 7px", fontSize:28}}>{member.name || "İsimsiz Üye"}</h2>
             <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
               <span className="tag purple">{member.role || "Üye"}</span>
@@ -1751,6 +1942,51 @@ function ProfilePage({data, update, currentUser, flash, setPage}) {
           </div>
         </div>
       </section>
+
+      <section className="panel" style={{marginBottom:18, padding:0, overflow:"hidden", background:"linear-gradient(135deg, rgba(255,157,34,.10), rgba(124,92,255,.07) 55%, rgba(255,255,255,.02))"}}>
+        <div style={{padding:"22px",display:"grid",gridTemplateColumns:"1.15fr 1fr",gap:18,alignItems:"stretch"}}>
+          {(() => {
+            const xp = xpForMember(member, data);
+            const level = xpLevelInfo(xp);
+            const leaderboard = (data.members || []).filter(m=>m.active !== false).map(m=>({member:m,xp:xpForMember(m,data)})).sort((a,b)=>b.xp-a.xp);
+            return <>
+              <div style={{padding:18,border:"1px solid rgba(255,255,255,.08)",borderRadius:16,background:"rgba(0,0,0,.14)"}}>
+                <div className="eyebrow">TAKIM XP SİSTEMİ</div>
+                <div style={{display:"flex",alignItems:"center",gap:14,marginTop:10}}>
+                  <div style={{width:62,height:62,borderRadius:18,display:"grid",placeItems:"center",background:"linear-gradient(145deg,#ff9d22,#7c5cff)",fontSize:25,fontWeight:900}}>★</div>
+                  <div><div style={{fontSize:22,fontWeight:900}}>Seviye {level.level}</div><small style={{opacity:.65}}>Takım Oyuncusu</small></div>
+                </div>
+                <div style={{marginTop:18,display:"flex",justifyContent:"space-between",fontSize:11}}><b>{level.current} / {level.next} XP</b><span>{level.pct}%</span></div>
+                <div style={{height:9,borderRadius:20,background:"#18212b",overflow:"hidden",marginTop:7}}><div style={{width:`${level.pct}%`,height:"100%",background:"linear-gradient(90deg,#ff8a0b,#ffbd55)",borderRadius:20}}/></div>
+                <small style={{display:"block",marginTop:8,opacity:.5}}>Sonraki seviye: {level.level+1}</small>
+                <strong style={{display:"block",marginTop:10,color:"#ff9b1c"}}>{xp} toplam XP</strong>
+              </div>
+               <div style={{padding:18,border:"1px solid rgba(255,255,255,.08)",borderRadius:16,background:"rgba(0,0,0,.14)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h3 style={{margin:0}}>🏅 Takım XP Sıralaması</h3><small style={{opacity:.5}}>Top 5</small></div>
+                <div style={{marginTop:10}}>{leaderboard.slice(0,5).map((row,i)=><div key={row.member.id} style={{display:"flex",alignItems:"center",gap:9,padding:"8px 0",borderBottom:i<4?"1px solid rgba(255,255,255,.05)":"none"}}><span style={{width:22,textAlign:"center",fontWeight:900,color:i===0?"#ffbd55":"#8894a4"}}>{i+1}</span><span className="avatar small" style={{width:30,height:30}}>{row.member.name?.[0]||"?"}</span><div style={{flex:1,minWidth:0}}><b style={{display:"block",fontSize:11,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{row.member.name}{String(row.member.id)===String(member.id)?" (Sen)":""}</b><small style={{opacity:.5}}>{row.member.department||"Bölüm yok"}</small></div><strong style={{color:"#ff9b1c",fontSize:11}}>{row.xp} XP</strong></div>)}</div>
+              </div>
+            </>;
+          })()}
+        </div>
+      </section>
+
+      {(() => {
+        const stats = memberXpStats(member, data);
+        const badges = XP_BADGES.map(b => ({...b, unlocked:!!b.ok(stats)}));
+        const unlocked = badges.filter(b => b.unlocked);
+        const history = memberXpHistory(member, data);
+        return <>
+          <section className="panel xpBadgesPanel" style={{marginBottom:18}}>
+            <div className="panelHeader"><div><h2><span>🏅</span>Rozetlerim</h2><small className="panelSub">İlerledikçe yeni rozetlerin açılır.</small></div><b>{unlocked.length}/{badges.length}</b></div>
+            <div className="xpBadgeGrid">{badges.map(b => <div className={`xpBadgeCard ${b.unlocked ? "unlocked" : "locked"}`} key={b.id}><div className="xpBadgeIcon">{b.unlocked ? b.icon : "🔒"}</div><div><strong>{b.unlocked ? b.name : "Gizli Rozet"}</strong><small>{b.unlocked ? b.desc : "Henüz açılmadı"}</small></div><em>{b.xp ? `+${b.xp} XP` : "???"}</em></div>)}</div>
+          </section>
+
+          <section className="panel xpHistoryPanel" style={{marginBottom:18}}>
+            <div className="panelHeader"><div><h2><span>⚡</span>XP Geçmişi</h2><small className="panelSub">Son kazanımların.</small></div><b>{history.reduce((sum,r)=>sum+r.xp,0)} XP</b></div>
+            {history.length ? <div className="xpHistoryList">{history.slice(0,5).map((r,i)=><div className="xpHistoryRow" key={`${r.label}-${r.date}-${i}`}><div><strong>{r.label}</strong><small>{r.date ? new Date(r.date).toLocaleString("tr-TR") : "Tarih yok"}</small></div><b>+{r.xp} XP</b></div>)}</div> : <Empty text="Henüz XP hareketi yok."/>}
+          </section>
+        </>;
+      })()}
 
       {editing && (
         <section className="panel" style={{marginBottom:18}}>
@@ -1958,9 +2194,11 @@ function TaskStatusChart({ tasks = [] }) {
 }
 
 function ReportsPage({data}) {
+  const [reportView,setReportView]=useState(null);
   const total=data.tasks.length||1, done=data.tasks.filter(t=>t.status==="Tamamlandı").length;
   const pct=Math.round(done/total*100);
-  return <><PageTitle title="Raporlar" sub="Takım faaliyetlerini ve performansını özetle."/><div className="reportGrid"><div className="panel bigMetric"><span>Görev Tamamlama</span><b>{pct}%</b><div className="progress"><i style={{width:`${pct}%`}} /></div></div><div className="panel bigMetric"><span>Etkinlik Sayısı</span><b>{data.events.length}</b><small>Takvimde kayıtlı toplam etkinlik</small></div><div className="panel bigMetric"><span>Aktif Üye</span><b>{data.members.filter(m=>m.active).length}</b><small>Takım kadrosu</small></div><div className="panel bigMetric"><span>Duyuru</span><b>{data.announcements.length}</b><small>Yayınlanan içerik</small></div></div><div className="panel"><h2>Görev Özeti</h2><div className="reportBars">{["Bekliyor","Devam","Tamamlandı"].map((s,i)=><div key={s} style={{height:`${Math.max(18, data.tasks.filter(t=>t.status===(["Bekliyor","Devam Ediyor","Tamamlandı"][i])).length*28)}px`}}><span>{s}</span></div>)}</div></div></>;
+  const completionReports=data.tasks.filter(t=>t.completionReport).sort((a,b)=>new Date(b.completionReport.completed_at||0)-new Date(a.completionReport.completed_at||0));
+  return <><PageTitle title="Raporlar" sub="Takım faaliyetlerini ve performansını özetle."/><div className="reportGrid"><div className="panel bigMetric"><span>Görev Tamamlama</span><b>{pct}%</b><div className="progress"><i style={{width:`${pct}%`}} /></div></div><div className="panel bigMetric"><span>Etkinlik Sayısı</span><b>{data.events.length}</b><small>Takvimde kayıtlı toplam etkinlik</small></div><div className="panel bigMetric"><span>Aktif Üye</span><b>{data.members.filter(m=>m.active).length}</b><small>Takım kadrosu</small></div><div className="panel bigMetric"><span>Duyuru</span><b>{data.announcements.length}</b><small>Yayınlanan içerik</small></div></div><div className="panel"><h2>Görev Özeti</h2><div className="reportBars">{["Bekliyor","Devam","Tamamlandı"].map((s,i)=><div key={s} style={{height:`${Math.max(18,data.tasks.filter(t=>t.status===(['Bekliyor','Devam Ediyor','Tamamlandı'][i])).length*28)}px`}}><span>{s}</span></div>)}</div></div><div className="panel completionReportsPanel"><div className="panelHeader"><div><h2><span>▣</span>Tamamlanma Raporları</h2><small className="panelSub">Tamamlanan görevlerin detaylı çalışma raporları.</small></div><b>{completionReports.length}</b></div>{completionReports.length?<div className="completionReportList">{completionReports.map(task=>{const r=task.completionReport;return <article className="completionReportCard" key={task.id}><div className="completionReportIcon">📄</div><div className="completionReportBody"><div className="completionReportTop"><div><h3>{task.title}</h3><small>{task.assignmentMeta?.mode==="department"?`${task.assignmentMeta.department} Departmanı`:task.assignee||"Atama bilgisi yok"}</small></div><span>✓ Tamamlandı</span></div><div className="completionReportMeta"><b>👥 {(r.completed_by_names||[r.completed_by_name]).filter(Boolean).join(" + ")||"—"}</b><span>🕐 {r.completed_at?new Date(r.completed_at).toLocaleString("tr-TR"):"—"}</span></div><p>{r.work_done||"Yapılan iş açıklaması yok."}</p><button className="ghost smallButton" onClick={()=>setReportView({task,report:r})}>📄 Raporu Gör</button></div></article>})}</div>:<Empty text="Henüz tamamlanma raporu bulunmuyor."/>}</div>{reportView&&<Modal title="📄 Görev Tamamlanma Raporu" close={()=>setReportView(null)}><div className="reportDocument"><div className="reportDocumentHead"><div><small>GÖREV TAMAMLANMA RAPORU</small><h2>{reportView.task.title}</h2></div><span>✓ Tamamlandı</span></div><div className="reportMeta"><div><small>İşi Yapanlar</small><b>{(reportView.report.completed_by_names||[reportView.report.completed_by_name]).filter(Boolean).join(" + ")||"—"}</b></div><div><small>Tamamlanma zamanı</small><b>{reportView.report.completed_at?new Date(reportView.report.completed_at).toLocaleString("tr-TR"):"—"}</b></div></div><div className="reportSection"><h3>Atama</h3><p>{reportView.task.assignmentMeta?.mode==="department"?`${reportView.task.assignmentMeta.department} Departmanı`:reportView.task.assignee||"—"}</p></div><div className="reportSection"><h3>Yapılan İş</h3><p>{reportView.report.work_done||"—"}</p></div><div className="reportSection"><h3>Karşılaşılan Sorunlar</h3><p>{reportView.report.problems||"Sorun belirtilmemiş."}</p></div><div className="reportSection"><h3>Çözüm</h3><p>{reportView.report.solution||"—"}</p></div><div className="reportSection"><h3>Kullanılan Malzemeler / Parçalar</h3><p>{reportView.report.materials||"—"}</p></div><div className="reportSection"><h3>Ek Not</h3><p>{reportView.report.extra_note||"—"}</p></div>{reportView.report.attachments?.length>0&&<div className="reportSection"><h3>Ekler</h3><div className="reportAttachments">{reportView.report.attachments.map(a=><a key={a.id} href={a.file_url} target="_blank" rel="noreferrer">📎 {a.file_name}</a>)}</div></div>}</div></Modal>}</>;
 }
 
 function SettingsPage({data,update,canAdmin,flash}) {
