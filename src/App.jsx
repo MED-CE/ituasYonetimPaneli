@@ -1237,9 +1237,22 @@ function CalendarPage({ data, update, canManage, currentUser, setData, flash }) 
     setModal({ type:"new" });
   }
 
-  function save() {
+  async function save() {
     if (!form.title.trim()) return;
-    update({ events:[...data.events, { ...form, id:Date.now(), creator:data.user?.name || "Kaptan", created_by:data.user?.id || null }] });
+    const payload = eventToDb({
+      ...form,
+      id: "dummy",
+      creator: data.user?.name || "Kaptan",
+      created_by: data.user?.id || null
+    });
+    delete payload.id;
+
+    const { data: row, error } = await supabase.from("events").insert(payload).select("*").single();
+    if (error) {
+      flash("Etkinlik eklenirken hata: " + error.message);
+      return;
+    }
+    update({ events:[...data.events, mapEvent(row)] });
     setModal(null); flash("Etkinlik eklendi.");
   }
 
@@ -1446,7 +1459,30 @@ function EventForm({form,setForm,save,close,canManage}) {
 function AnnouncementsPage({data,update,canManage,flash}) {
   const [modal,setModal]=useState(false);
   const [form,setForm]=useState({title:"",body:"",priority:"Normal",pinned:false});
-  function save(){if(!form.title.trim())return;update({announcements:[{...form,id:Date.now(),date:new Date().toISOString(),author:data.user.name,author_id:data.user.id || null},...data.announcements]});setForm({title:"",body:"",priority:"Normal",pinned:false});setModal(false);flash("Duyuru yayınlandı.");}
+  
+  async function save() {
+    if(!form.title.trim()) return;
+    const payload = announcementToDb({
+      ...form,
+      id: "dummy",
+      date: new Date().toISOString(),
+      author: data.user.name,
+      author_id: data.user.id || null
+    });
+    delete payload.id;
+    
+    const { data: row, error } = await supabase.from("announcements").insert(payload).select("*").single();
+    if (error) {
+      flash("Duyuru eklenirken hata: " + error.message);
+      return;
+    }
+    
+    update({announcements:[mapAnnouncement(row), ...data.announcements]});
+    setForm({title:"",body:"",priority:"Normal",pinned:false});
+    setModal(false);
+    flash("Duyuru yayınlandı.");
+  }
+  
   function remove(id){if(!confirm("Duyuru silinsin mi?"))return;update({announcements:data.announcements.filter(a=>a.id!==id)});flash("Duyuru silindi.");}
   function pin(id){update({announcements:data.announcements.map(a=>a.id===id?{...a,pinned:!a.pinned}:a)});}
   return <><PageTitle title="Duyurular" sub="Takım içi bilgilendirmeleri tek yerden yönet." action={canManage&&<button className="primary" onClick={()=>setModal(true)}>+ Duyuru Yayınla</button>}/><div className="announcementPage">{data.announcements.sort((a,b)=>Number(b.pinned)-Number(a.pinned)).map(a=><article className="announcementCard" key={a.id}><div className={`annIcon ${a.priority==="Yüksek"?"orange":"purple"}`}>◈</div><div className="annContent"><div className="annTitle"><h3>{a.title}</h3>{a.pinned&&<span className="tag orangeTag">Sabit</span>}</div><p>{a.body}</p><small>{a.author} • {new Date(a.date).toLocaleString("tr-TR")}</small></div><div className="cardActions">{canManage&&<><button onClick={()=>pin(a.id)}>📌</button><button onClick={()=>remove(a.id)}>🗑</button></>}</div></article>)}</div>{modal&&<Modal title="Duyuru Yayınla" close={()=>setModal(false)}><label>Başlık<input value={form.title} onChange={e=>setForm({...form,title:e.target.value})}/></label><label>İçerik<textarea value={form.body} onChange={e=>setForm({...form,body:e.target.value})}/></label><div className="formGrid"><label>Öncelik<select value={form.priority} onChange={e=>setForm({...form,priority:e.target.value})}><option>Normal</option><option>Yüksek</option></select></label><label className="checkLabel"><input type="checkbox" checked={form.pinned} onChange={e=>setForm({...form,pinned:e.target.checked})}/> Sabitle</label></div><div className="modalActions"><button className="ghost" onClick={()=>setModal(false)}>Vazgeç</button><button className="primary" onClick={save}>Yayınla</button></div></Modal>}</>;
